@@ -126,5 +126,12 @@ Root `a93eb01b-b30f-49bf-b4a8-5e3f917c0e3f`. Phases: M0
   `make db-test` passes 5 PostgreSQL tests; `terraform validate` passes;
   `cargo lambda build --release` produces the bootstrap. The phone layout is
   CSS-only and has not been viewed on a device.
-- M4 next: push to deploy, check `/health`, then publish Boreal Pocket once
-  the publisher credentials are readable from SSM.
+- M0 complete: the first `ahara-infra` run (35916210072) failed at
+  `terraform init` because the runner failed TLS verification to github.com;
+  the rerun succeeded and applied the registration.
+- M4 complete: score-shelf CI 35919737368 deployed; `/health` 200, unauthenticated
+  `/pieces` 401, app 200. On 2026-09-23 `shelf.sh` (credentials from SSM)
+  published v1 of Boreal Pocket, Anamnesis, Conatus, Enaction, The Quarry
+  Rounds, The Axiom Interrupt and Headland Aria; pulling Boreal Pocket back
+  returned byte-identical MusicXML and MIDI.
+- Not verified: the SPA sign-in and download flow on a phone (owner check).
