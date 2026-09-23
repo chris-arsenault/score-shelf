@@ -5,24 +5,36 @@
 #   shelf.sh list
 #   shelf.sh pull <slug> [--version N] [--out DIR]
 #
-# Authenticates with the publisher's client-credentials grant. Needs
-# SCORE_SHELF_CLIENT_ID and SCORE_SHELF_CLIENT_SECRET in the environment
-# (in the Sulion dev environment: `with-cred -- scripts/shelf.sh ...`).
-# The values live in SSM under /ahara/score-shelf/.
+# Authenticates with the publisher's client-credentials grant. The client id
+# and secret are created by ahara-infra (services/score-shelf-publisher.tf)
+# and stored in SSM under /ahara/score-shelf/. The script reads them from
+# SCORE_SHELF_CLIENT_ID / SCORE_SHELF_CLIENT_SECRET when set, otherwise from
+# SSM with the ambient AWS credentials.
 set -euo pipefail
 
 API_URL="${SCORE_SHELF_API_URL:-https://api.score-shelf.ahara.io}"
 TOKEN_URL="${SCORE_SHELF_TOKEN_URL:-https://auth.services.ahara.io/oauth2/token}"
 SCOPE="${SCORE_SHELF_SCOPE:-score-shelf/publish}"
+SSM_PREFIX="/ahara/score-shelf"
 
 die() {
   echo "shelf.sh: $*" >&2
   exit 1
 }
 
+ssm_value() {
+  aws ssm get-parameter --name "${SSM_PREFIX}/$1" --with-decryption \
+    --query Parameter.Value --output text \
+    || die "could not read ${SSM_PREFIX}/$1 from SSM; set SCORE_SHELF_CLIENT_ID/SECRET instead"
+}
+
 token() {
-  : "${SCORE_SHELF_CLIENT_ID:?set SCORE_SHELF_CLIENT_ID}"
-  : "${SCORE_SHELF_CLIENT_SECRET:?set SCORE_SHELF_CLIENT_SECRET}"
+  if [ -z "${SCORE_SHELF_CLIENT_ID:-}" ]; then
+    SCORE_SHELF_CLIENT_ID="$(ssm_value publisher-client-id)"
+  fi
+  if [ -z "${SCORE_SHELF_CLIENT_SECRET:-}" ]; then
+    SCORE_SHELF_CLIENT_SECRET="$(ssm_value publisher-client-secret)"
+  fi
   curl -fsS -u "${SCORE_SHELF_CLIENT_ID}:${SCORE_SHELF_CLIENT_SECRET}" \
     -d "grant_type=client_credentials" --data-urlencode "scope=${SCOPE}" \
     "${TOKEN_URL}" | jq -er .access_token

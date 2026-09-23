@@ -27,15 +27,18 @@ Details: [docs/architecture.md](docs/architecture.md).
 ## Publishing from the dev box
 
 ```bash
-with-cred -- scripts/shelf.sh publish boreal_pocket --label "key ladders" \
+scripts/shelf.sh publish boreal_pocket --label "key ladders" \
   --title "Boreal Pocket" --ref "$(git rev-parse --short HEAD)" \
   ../sigillum-explorations/outputs/explorations/boreal_pocket/boreal_pocket/*
-with-cred -- scripts/shelf.sh list
-with-cred -- scripts/shelf.sh pull boreal_pocket --out /tmp/boreal-edit
+scripts/shelf.sh list
+scripts/shelf.sh pull boreal_pocket --out /tmp/boreal-edit
 ```
 
-Outside Sulion, set `SCORE_SHELF_CLIENT_ID` and `SCORE_SHELF_CLIENT_SECRET`
-(SSM `/ahara/score-shelf/publisher-client-id` and `publisher-client-secret`).
+The publisher client is created by `ahara-infra`
+(`services/score-shelf-publisher.tf`); its id and secret are in SSM at
+`/ahara/score-shelf/publisher-client-id` and `publisher-client-secret`. The
+script reads them from SSM with the ambient AWS credentials, or from
+`SCORE_SHELF_CLIENT_ID` / `SCORE_SHELF_CLIENT_SECRET` when those are set.
 
 ## Local development
 

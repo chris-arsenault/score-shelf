@@ -61,8 +61,10 @@ Settled:
 Deferred:
 
 - In-browser rendering and MIDI playback: owner decides after using M3.
-- Broker secret for the publisher: the owner creates it from the SSM values
-  after M0 applies; blocks only the live publish check in M4.
+- Publisher credential access: the owner declined a broker secret
+  (2026-09-23); the credentials stay in Terraform-managed SSM and
+  `shelf.sh` reads them there. Reading them from this terminal needs AWS
+  access enabled for it; blocks only the live publish check in M4.
 
 ## Milestones
 
@@ -100,7 +102,7 @@ layout works at phone width.
 Scope: push to main so CI deploys; `scripts/publish.sh` (token via client
 credentials, create, upload, commit) and its use from sigillum-explorations.
 Acceptance: `https://api.score-shelf.ahara.io/health` answers; the app loads;
-with the owner-created broker secret, Boreal Pocket's current export
+with the publisher credentials read from SSM, Boreal Pocket's current export
 publishes and appears in the app.
 
 ## Sulion mapping
@@ -125,4 +127,4 @@ Root `a93eb01b-b30f-49bf-b4a8-5e3f917c0e3f`. Phases: M0
   `cargo lambda build --release` produces the bootstrap. The phone layout is
   CSS-only and has not been viewed on a device.
 - M4 next: push to deploy, check `/health`, then publish Boreal Pocket once
-  the owner grants the publisher secret to the broker.
+  the publisher credentials are readable from SSM.

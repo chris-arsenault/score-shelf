@@ -26,7 +26,7 @@ a private S3 bucket.
 - The publisher client, its resource server and SSM parameters live in `ahara-infra` (`services/score-shelf-publisher.tf`), not here.
 - Start local development servers only when the user explicitly asks.
 - Run `make ci` before handoff after changing files.
-- Use the secret broker only for commands that need injected secrets (`scripts/shelf.sh`, AWS, database).
+- `scripts/shelf.sh` reads the publisher credentials from SSM (`/ahara/score-shelf/`), which Terraform in `ahara-infra` creates; do not copy them into files or broker secrets.
 
 ## Code map
 
