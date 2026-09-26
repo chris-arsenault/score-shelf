@@ -29,11 +29,12 @@ ssm_value() {
 }
 
 token() {
+  # ssm_value runs in a subshell, so its die only ends that subshell; stop here too.
   if [ -z "${SCORE_SHELF_CLIENT_ID:-}" ]; then
-    SCORE_SHELF_CLIENT_ID="$(ssm_value publisher-client-id)"
+    SCORE_SHELF_CLIENT_ID="$(ssm_value publisher-client-id)" || exit 1
   fi
   if [ -z "${SCORE_SHELF_CLIENT_SECRET:-}" ]; then
-    SCORE_SHELF_CLIENT_SECRET="$(ssm_value publisher-client-secret)"
+    SCORE_SHELF_CLIENT_SECRET="$(ssm_value publisher-client-secret)" || exit 1
   fi
   curl -fsS -u "${SCORE_SHELF_CLIENT_ID}:${SCORE_SHELF_CLIENT_SECRET}" \
     -d "grant_type=client_credentials" --data-urlencode "scope=${SCOPE}" \
