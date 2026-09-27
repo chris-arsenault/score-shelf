@@ -216,6 +216,126 @@ async fn test_invalid_publish_bodies_are_rejected() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
+/// Publishes `label` (optionally replacing `replaces`), uploads and commits.
+async fn publish_ready(api: &TestApi, auth: &str, label: &str, replaces: Option<i32>) -> Value {
+    let mut body = publish_body();
+    body["label"] = json!(label);
+    if let Some(number) = replaces {
+        body["replaces"] = json!(number);
+    }
+    let path = "/pieces/boreal_pocket/versions";
+    let (status, created) = call(api, Method::POST, path, Some(auth), Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    upload_all(api, &created);
+    let commit = format!(
+        "/versions/{}/commit",
+        created["version_id"].as_str().unwrap()
+    );
+    let (status, version) = call(api, Method::POST, &commit, Some(auth), None).await;
+    assert_eq!(status, StatusCode::OK, "{version}");
+    created
+}
+
+async fn labels(api: &TestApi) -> Vec<(i64, String)> {
+    let path = "/pieces/boreal_pocket";
+    let (_, detail) = call(api, Method::GET, path, Some(&owner_bearer()), None).await;
+    detail["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| {
+            (
+                v["number"].as_i64().unwrap(),
+                v["label"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn test_replacing_the_latest_version_keeps_its_number() {
+    let api = test_api();
+    publish_ready(&api, &publisher_bearer(), "first", None).await;
+    let old = publish_ready(&api, &publisher_bearer(), "trombone", None).await;
+    let new = publish_ready(&api, &publisher_bearer(), "trombone, drum fix", Some(2)).await;
+    assert_eq!(new["number"], 2);
+    assert_eq!(
+        labels(&api).await,
+        vec![
+            (2, "trombone, drum fix".to_string()),
+            (1, "first".to_string())
+        ]
+    );
+    let old_file = old["uploads"][0]["file_id"].as_str().unwrap();
+    let path = format!("/files/{old_file}/download");
+    let (status, _) = call(&api, Method::GET, &path, Some(&owner_bearer()), None).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "replaced files are not served"
+    );
+}
+
+#[tokio::test]
+async fn test_replace_must_name_the_latest_version_from_the_same_source() {
+    let api = test_api();
+    publish_ready(&api, &publisher_bearer(), "first", None).await;
+    publish_ready(&api, &owner_bearer(), "hand edit", None).await;
+    let path = "/pieces/boreal_pocket/versions";
+    let mut body = publish_body();
+    body["replaces"] = json!(1);
+    let (status, _) = call(
+        &api,
+        Method::POST,
+        path,
+        Some(&publisher_bearer()),
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "1 is not the latest");
+    let mut body = publish_body();
+    body["replaces"] = json!(2);
+    let (status, _) = call(
+        &api,
+        Method::POST,
+        path,
+        Some(&publisher_bearer()),
+        Some(body),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "the agent cannot replace a hand edit"
+    );
+}
+
+#[tokio::test]
+async fn test_retiring_the_latest_version_frees_its_number() {
+    let api = test_api();
+    publish_ready(&api, &publisher_bearer(), "first", None).await;
+    publish_ready(&api, &publisher_bearer(), "re-tag", None).await;
+    let retire = "/pieces/boreal_pocket/versions/2/retire";
+    let (status, _) = call(&api, Method::POST, retire, Some(&publisher_bearer()), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(labels(&api).await, vec![(1, "first".to_string())]);
+    let next = publish_ready(&api, &publisher_bearer(), "reorder", None).await;
+    assert_eq!(next["number"], 2);
+    let (status, _) = call(&api, Method::POST, retire, Some(&publisher_bearer()), None).await;
+    assert_eq!(status, StatusCode::OK, "the new version 2 is retirable");
+}
+
+#[tokio::test]
+async fn test_publisher_cannot_retire_owner_versions() {
+    let api = test_api();
+    publish_ready(&api, &owner_bearer(), "hand edit", None).await;
+    let retire = "/pieces/boreal_pocket/versions/1/retire";
+    let (status, _) = call(&api, Method::POST, retire, Some(&publisher_bearer()), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(&api, Method::POST, retire, Some(&owner_bearer()), None).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
 #[tokio::test]
 async fn test_me_reports_the_caller() {
     let api = test_api();

@@ -12,7 +12,7 @@ versions from the dev box; the owner downloads them and uploads hand edits.
 | `frontend/`                 | Vite React SPA: sign-in with TOTP, piece list, versions, downloads, uploads     |
 | `db/migrations/`            | `pieces`, `versions`, `version_files`                                           |
 | `infrastructure/terraform/` | Website, API, Cognito app client, private bucket, runtime config, alarms        |
-| `scripts/shelf.sh`          | Publisher client: client-credentials token, publish, list, pull                 |
+| `scripts/shelf.sh`          | Publisher client: client-credentials token, publish (or replace), retire, list, pull |
 
 ## Platform integration
 
@@ -54,6 +54,24 @@ POST /versions/{version_id}/commit  -> API HEADs each object, checks size, marks
 Pieces are created on first publish. Version numbers count per piece and are
 assigned under a row lock. Pending versions are invisible; a commit fails if
 any object is missing or has the wrong size, and succeeds once.
+
+The shelf holds meaningful revisions only ([ADR 0002](adr/0002-replace-instead-of-append.md)):
+
+```text
+POST /pieces/{slug}/versions {"replaces": N, ...}  -> a pending version numbered N
+POST /versions/{version_id}/commit                  -> N's old row becomes 'replaced'
+POST /pieces/{slug}/versions/{number}/retire        -> the version becomes 'retired'
+```
+
+A replacement must name the piece's latest ready version and come from the
+same source (the publisher cannot replace a hand edit). The old version stays
+visible until the replacement commits; both status changes happen in one
+transaction. A retired version is hidden. The owner may retire any version,
+the publisher only agent versions. A new version is numbered after the highest
+ready or pending number, so retiring the latest lets the next publish reuse
+its number. Replaced and retired rows keep their files and history in the
+database and bucket but are never listed or downloadable. Numbers are unique
+among ready versions.
 
 ## Reading
 

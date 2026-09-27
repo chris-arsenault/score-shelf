@@ -30,9 +30,19 @@ Details: [docs/architecture.md](docs/architecture.md).
 scripts/shelf.sh publish boreal_pocket --label "key ladders" \
   --title "Boreal Pocket" --ref "$(git rev-parse --short HEAD)" \
   ../sigillum-explorations/outputs/explorations/boreal_pocket/boreal_pocket/*
+scripts/shelf.sh publish boreal_pocket --replace --label "key ladders" \
+  --ref "$(git rev-parse --short HEAD)" \
+  ../sigillum-explorations/outputs/explorations/boreal_pocket/boreal_pocket/*
+scripts/shelf.sh retire boreal_pocket --version 4
 scripts/shelf.sh list
 scripts/shelf.sh pull boreal_pocket --out /tmp/boreal-edit
 ```
+
+The shelf holds meaningful revisions only. Publish a new version for a
+musical change. For a fix to the latest version (an export repair, or
+re-tagging it with its commit), use `--replace`: the fix takes over the latest
+version's number and the old files are hidden. `retire` hides a version that
+should not have been published.
 
 The publisher client is created by `ahara-infra`
 (`services/score-shelf-publisher.tf`); its id and secret are in SSM at

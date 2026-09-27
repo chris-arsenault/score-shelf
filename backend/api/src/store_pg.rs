@@ -14,9 +14,16 @@ use crate::store::{
 };
 use crate::store_pg_read;
 
-pub const SHELF_MIGRATION: &str = include_str!("../../../db/migrations/001_create_shelf.sql");
-pub const SHELF_ROLLBACK: &str =
-    include_str!("../../../db/migrations/rollback/001_create_shelf.sql");
+/// Forward migrations, in the order they apply.
+pub const SHELF_MIGRATIONS: [&str; 2] = [
+    include_str!("../../../db/migrations/001_create_shelf.sql"),
+    include_str!("../../../db/migrations/002_replace_and_retire_versions.sql"),
+];
+/// Rollbacks, in the order they apply (newest first).
+pub const SHELF_ROLLBACKS: [&str; 2] = [
+    include_str!("../../../db/migrations/rollback/002_replace_and_retire_versions.sql"),
+    include_str!("../../../db/migrations/rollback/001_create_shelf.sql"),
+];
 
 const MAX_POOL_CONNECTIONS: u32 = 5;
 
@@ -74,11 +81,12 @@ impl ShelfStore for PgShelfStore {
     async fn create_version(&self, version: &NewVersion) -> AppResult<CreatedVersion> {
         let mut tx = self.pool.begin().await?;
         let piece_id = upsert_piece(&mut tx, version).await?;
-        let number = next_version_number(&mut tx, piece_id).await?;
+        let (number, replaces) = plan_number(&mut tx, piece_id, version).await?;
         let version_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO versions (id, piece_id, number, label, notes, source, source_ref, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')",
+            "INSERT INTO versions
+               (id, piece_id, number, label, notes, source, source_ref, status, replaces_version_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8)",
         )
         .bind(version_id)
         .bind(piece_id)
@@ -87,6 +95,7 @@ impl ShelfStore for PgShelfStore {
         .bind(&version.notes)
         .bind(version.source)
         .bind(&version.source_ref)
+        .bind(replaces)
         .execute(&mut *tx)
         .await?;
         let files = insert_files(&mut tx, version, version_id, number).await?;
@@ -128,15 +137,33 @@ impl ShelfStore for PgShelfStore {
 
     async fn mark_ready(&self, version_id: Uuid) -> AppResult<VersionSummary> {
         let mut tx = self.pool.begin().await?;
-        let piece_id: Option<Uuid> = sqlx::query_scalar(
-            "UPDATE versions SET status = 'ready', committed_at = now()
-             WHERE id = $1 AND status = 'pending' RETURNING piece_id",
+        let pending: Option<(Uuid, Option<Uuid>)> = sqlx::query_as(
+            "SELECT piece_id, replaces_version_id FROM versions
+             WHERE id = $1 AND status = 'pending' FOR UPDATE",
         )
         .bind(version_id)
         .fetch_optional(&mut *tx)
         .await?;
-        let piece_id =
-            piece_id.ok_or_else(|| AppError::Conflict("version is not pending".to_string()))?;
+        let (piece_id, replaces) =
+            pending.ok_or_else(|| AppError::Conflict("version is not pending".to_string()))?;
+        if let Some(replaced_id) = replaces {
+            let hidden = sqlx::query(
+                "UPDATE versions SET status = 'replaced' WHERE id = $1 AND status = 'ready'",
+            )
+            .bind(replaced_id)
+            .execute(&mut *tx)
+            .await?;
+            if hidden.rows_affected() != 1 {
+                return Err(AppError::Conflict(
+                    "the version this replaces is no longer ready".to_string(),
+                ));
+            }
+        }
+        sqlx::query("UPDATE versions SET status = 'ready', committed_at = now() WHERE id = $1")
+            .bind(version_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(number_taken)?;
         sqlx::query("UPDATE pieces SET updated_at = now() WHERE id = $1")
             .bind(piece_id)
             .execute(&mut *tx)
@@ -147,6 +174,33 @@ impl ShelfStore for PgShelfStore {
 
     async fn ready_file(&self, file_id: Uuid) -> AppResult<Option<StoredFile>> {
         store_pg_read::ready_file(&self.pool, file_id).await
+    }
+
+    async fn retire_version(&self, slug: &str, number: i32, source: Option<&str>) -> AppResult<()> {
+        let retired: Option<Uuid> = sqlx::query_scalar(
+            "UPDATE versions v SET status = 'retired' FROM pieces p
+             WHERE p.id = v.piece_id AND p.slug = $1 AND v.number = $2 AND v.status = 'ready'
+               AND ($3::text IS NULL OR v.source = $3)
+             RETURNING v.id",
+        )
+        .bind(slug)
+        .bind(number)
+        .bind(source)
+        .fetch_optional(&self.pool)
+        .await?;
+        retired
+            .map(|_| ())
+            .ok_or_else(|| AppError::NotFound(format!("version {number} of {slug}")))
+    }
+}
+
+/// A commit that loses a race for its number surfaces as a conflict, not a 500.
+fn number_taken(err: sqlx::Error) -> AppError {
+    match &err {
+        sqlx::Error::Database(db) if db.is_unique_violation() => {
+            AppError::Conflict("another version took this number; publish again".to_string())
+        }
+        _ => err.into(),
     }
 }
 
@@ -164,17 +218,48 @@ async fn upsert_piece(tx: &mut Transaction<'_, Postgres>, version: &NewVersion) 
     Ok(id)
 }
 
-async fn next_version_number(tx: &mut Transaction<'_, Postgres>, piece_id: Uuid) -> AppResult<i32> {
+/// The number a new version takes, and the version it replaces if any. A new
+/// version follows the highest ready or pending number, so a retired latest frees
+/// its number; a replacement must name the latest ready version and share its source.
+async fn plan_number(
+    tx: &mut Transaction<'_, Postgres>,
+    piece_id: Uuid,
+    version: &NewVersion,
+) -> AppResult<(i32, Option<Uuid>)> {
     sqlx::query("SELECT id FROM pieces WHERE id = $1 FOR UPDATE")
         .bind(piece_id)
         .execute(&mut **tx)
         .await?;
-    let number: i32 =
-        sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) + 1 FROM versions WHERE piece_id = $1")
-            .bind(piece_id)
-            .fetch_one(&mut **tx)
-            .await?;
-    Ok(number)
+    let latest: Option<(Uuid, i32, String)> = sqlx::query_as(
+        "SELECT id, number, source FROM versions WHERE piece_id = $1 AND status = 'ready'
+         ORDER BY number DESC LIMIT 1",
+    )
+    .bind(piece_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(wanted) = version.replaces else {
+        let next: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(number), 0) + 1 FROM versions
+             WHERE piece_id = $1 AND status IN ('ready', 'pending')",
+        )
+        .bind(piece_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        return Ok((next, None));
+    };
+    match latest {
+        Some((id, number, source)) if number == wanted => {
+            if source != version.source {
+                return Err(AppError::Forbidden(format!(
+                    "version {wanted} came from {source}"
+                )));
+            }
+            Ok((number, Some(id)))
+        }
+        _ => Err(AppError::Conflict(format!(
+            "version {wanted} is not the latest version"
+        ))),
+    }
 }
 
 async fn insert_files(
@@ -232,8 +317,10 @@ mod tests {
     #[test]
     fn test_migration_and_rollback_cover_all_tables() {
         for table in ["pieces", "versions", "version_files"] {
-            assert!(SHELF_MIGRATION.contains(&format!("CREATE TABLE {table}")));
-            assert!(SHELF_ROLLBACK.contains(&format!("DROP TABLE IF EXISTS {table}")));
+            assert!(SHELF_MIGRATIONS[0].contains(&format!("CREATE TABLE {table}")));
+            assert!(SHELF_ROLLBACKS[1].contains(&format!("DROP TABLE IF EXISTS {table}")));
         }
+        assert!(SHELF_MIGRATIONS[1].contains("replaces_version_id"));
+        assert!(SHELF_ROLLBACKS[0].contains("DROP COLUMN IF EXISTS replaces_version_id"));
     }
 }

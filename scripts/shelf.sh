@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # Publisher client for Score Shelf.
 #
-#   shelf.sh publish <slug> --label TEXT [--title TEXT] [--notes TEXT] [--ref TEXT] FILE...
+#   shelf.sh publish <slug> --label TEXT [--title TEXT] [--notes TEXT] [--ref TEXT] [--replace] FILE...
+#   shelf.sh retire <slug> --version N
 #   shelf.sh list
 #   shelf.sh pull <slug> [--version N] [--out DIR]
+#
+# Publish a new version only for a meaningful musical revision. A fix to the
+# latest version (an export repair, a re-tag with the commit ref) uses --replace:
+# it takes over the latest version's number, and the old files are hidden.
+# retire hides a version that should not have been published; retiring the
+# latest lets the next publish reuse its number.
 #
 # Authenticates with the publisher's client-credentials grant. The client id
 # and secret are created by ahara-infra (services/score-shelf-publisher.tf)
@@ -84,7 +91,7 @@ publish() {
   local slug="${1:-}"
   [ -n "${slug}" ] || die "publish needs a piece slug"
   shift
-  local label="" title="" notes="" ref=""
+  local label="" title="" notes="" ref="" replace=""
   local files=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -92,18 +99,27 @@ publish() {
       --title) title="$2"; shift 2 ;;
       --notes) notes="$2"; shift 2 ;;
       --ref) ref="$2"; shift 2 ;;
+      --replace) replace="yes"; shift ;;
       *) files+=("$1"); shift ;;
     esac
   done
   [ -n "${label}" ] || die "publish needs --label"
   [ "${#files[@]}" -gt 0 ] || die "publish needs at least one file"
 
+  local replaces="null"
+  if [ -n "${replace}" ]; then
+    replaces="$(api GET "/pieces/${slug}" | jq -e '.versions[0].number')" \
+      || die "--replace needs an existing version of ${slug}"
+  fi
+
   local body created version_id
   body="$(jq -n --arg label "${label}" --arg title "${title}" --arg notes "${notes}" \
-    --arg ref "${ref}" --argjson files "$(file_entries "${files[@]}")" \
+    --arg ref "${ref}" --argjson replaces "${replaces}" \
+    --argjson files "$(file_entries "${files[@]}")" \
     '{label: $label, notes: $notes, files: $files}
      + (if $title == "" then {} else {title: $title} end)
-     + (if $ref == "" then {} else {source_ref: $ref} end)')"
+     + (if $ref == "" then {} else {source_ref: $ref} end)
+     + (if $replaces == null then {} else {replaces: $replaces} end)')"
   created="$(api POST "/pieces/${slug}/versions" "${body}")"
   version_id="$(jq -er .version_id <<<"${created}")"
 
@@ -117,7 +133,26 @@ publish() {
       >/dev/null || die "upload of ${name} failed"
   done
   api POST "/versions/${version_id}/commit" >/dev/null
-  echo "Published ${slug} v$(jq -r .number <<<"${created}"): ${label}"
+  if [ -n "${replace}" ]; then
+    echo "Replaced ${slug} v$(jq -r .number <<<"${created}"): ${label}"
+  else
+    echo "Published ${slug} v$(jq -r .number <<<"${created}"): ${label}"
+  fi
+}
+
+retire() {
+  local slug="${1:-}" version=""
+  [ -n "${slug}" ] || die "retire needs a piece slug"
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --version) version="$2"; shift 2 ;;
+      *) die "unknown option $1" ;;
+    esac
+  done
+  [[ "${version}" =~ ^[0-9]+$ ]] || die "retire needs --version N"
+  api POST "/pieces/${slug}/versions/${version}/retire" >/dev/null
+  echo "Retired ${slug} v${version}"
 }
 
 list() {
@@ -154,11 +189,12 @@ pull() {
 }
 
 command="${1:-}"
-[ -n "${command}" ] || die "usage: shelf.sh publish|list|pull ..."
+[ -n "${command}" ] || die "usage: shelf.sh publish|retire|list|pull ..."
 shift
 ACCESS_TOKEN="$(token)"
 case "${command}" in
   publish) publish "$@" ;;
+  retire) retire "$@" ;;
   list) list ;;
   pull) pull "$@" ;;
   *) die "unknown command ${command}" ;;

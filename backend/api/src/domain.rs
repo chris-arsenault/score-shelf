@@ -51,6 +51,8 @@ pub struct NewVersionRequest {
     #[serde(default)]
     pub notes: String,
     pub source_ref: Option<String>,
+    /// Number of the piece's latest version to replace instead of adding one.
+    pub replaces: Option<i32>,
     pub files: Vec<NewFile>,
 }
 
@@ -71,6 +73,7 @@ pub struct NewVersion {
     pub notes: String,
     pub source: &'static str,
     pub source_ref: Option<String>,
+    pub replaces: Option<i32>,
     pub files: Vec<PlannedFile>,
 }
 
@@ -146,6 +149,11 @@ pub fn validate_new_version(
     let label = required_text(&request.label, "label", 200)?;
     let notes = bounded_text(&request.notes, "notes", 4000)?;
     let source_ref = optional_text(request.source_ref, "source_ref", 200)?;
+    if request.replaces.is_some_and(|number| number <= 0) {
+        return Err(AppError::Validation(
+            "replaces must be a version number".to_string(),
+        ));
+    }
     let files = validate_files(request.files)?;
     Ok(NewVersion {
         slug: slug.to_string(),
@@ -154,6 +162,7 @@ pub fn validate_new_version(
         notes,
         source,
         source_ref,
+        replaces: request.replaces,
         files,
     })
 }
@@ -258,6 +267,7 @@ mod tests {
             label: "  key ladders ".to_string(),
             notes: String::new(),
             source_ref: Some("66db377".to_string()),
+            replaces: None,
             files,
         }
     }
@@ -281,6 +291,17 @@ mod tests {
         for bad in ["", "Boreal", "-x", "a/b", &"a".repeat(65)] {
             assert!(validate_slug(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn test_replaces_must_be_a_positive_number() {
+        let mut req = request(vec![file("a.mid")]);
+        req.replaces = Some(0);
+        assert!(validate_new_version("p", req, "agent").is_err());
+        let mut req = request(vec![file("a.mid")]);
+        req.replaces = Some(3);
+        let version = validate_new_version("p", req, "agent").unwrap();
+        assert_eq!(version.replaces, Some(3));
     }
 
     #[test]

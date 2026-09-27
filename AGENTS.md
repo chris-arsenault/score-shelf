@@ -23,6 +23,7 @@ a private S3 bucket.
 - File bytes never pass through the API. The ALB WAF and Lambda payload limits forbid it; uploads and downloads use presigned S3 URLs.
 - The ALB verifies token signatures only. The API decides who the caller is from `client_id`, `token_use` and `scope`; never accept another app's tokens.
 - A version is invisible until committed, and a commit checks every uploaded object's size against what was declared.
+- The shelf holds meaningful revisions only: fixes to the latest version replace it (`replaces`, ADR 0002); never append a version for an export repair or a re-tag.
 - The publisher client, its resource server and SSM parameters live in `ahara-infra` (`services/score-shelf-publisher.tf`), not here.
 - Start local development servers only when the user explicitly asks.
 - Run `make ci` before handoff after changing files.

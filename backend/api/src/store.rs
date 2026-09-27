@@ -51,10 +51,16 @@ pub fn object_key(slug: &str, number: i32, file_id: Uuid, filename: &str) -> Str
 pub trait ShelfStore: Send + Sync {
     async fn list_pieces(&self) -> AppResult<Vec<PieceSummary>>;
     async fn piece_detail(&self, slug: &str) -> AppResult<Option<PieceDetail>>;
+    /// Creates a pending version. With `replaces`, it must name the piece's latest
+    /// ready version from the same source, and the new version takes its number.
     async fn create_version(&self, version: &NewVersion) -> AppResult<CreatedVersion>;
     async fn pending_version(&self, version_id: Uuid) -> AppResult<Option<PendingVersion>>;
+    /// Makes a pending version ready; a replacement hides the version it replaces
+    /// in the same transaction.
     async fn mark_ready(&self, version_id: Uuid) -> AppResult<VersionSummary>;
     async fn ready_file(&self, file_id: Uuid) -> AppResult<Option<StoredFile>>;
+    /// Hides a ready version. `source` limits which versions the caller may retire.
+    async fn retire_version(&self, slug: &str, number: i32, source: Option<&str>) -> AppResult<()>;
 }
 
 #[cfg(test)]

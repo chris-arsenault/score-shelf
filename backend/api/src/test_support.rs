@@ -18,9 +18,17 @@ use crate::store::{
 };
 use crate::ApiState;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Status {
+    Pending,
+    Ready,
+    Hidden,
+}
+
 struct StoredVersion {
     slug: String,
-    ready: bool,
+    status: Status,
+    replaces: Option<Uuid>,
     summary: VersionSummary,
     keys: Vec<String>,
 }
@@ -36,11 +44,32 @@ impl InMemoryShelfStore {
         let versions = self.versions.lock().unwrap();
         let mut ready: Vec<VersionSummary> = versions
             .iter()
-            .filter(|v| v.slug == slug && v.ready)
+            .filter(|v| v.slug == slug && v.status == Status::Ready)
             .map(|v| v.summary.clone())
             .collect();
         ready.sort_by_key(|v| std::cmp::Reverse(v.number));
         ready
+    }
+
+    /// Same rules as `store_pg::plan_number`.
+    fn plan_number(&self, version: &NewVersion) -> AppResult<(i32, Option<Uuid>)> {
+        let latest = self.ready_versions(&version.slug).into_iter().next();
+        let Some(wanted) = version.replaces else {
+            let versions = self.versions.lock().unwrap();
+            let highest = versions
+                .iter()
+                .filter(|v| v.slug == version.slug && v.status != Status::Hidden)
+                .map(|v| v.summary.number)
+                .max();
+            return Ok((highest.unwrap_or(0) + 1, None));
+        };
+        match latest {
+            Some(v) if v.number == wanted && v.source == version.source => Ok((wanted, Some(v.id))),
+            Some(v) if v.number == wanted => Err(AppError::Forbidden(v.source)),
+            _ => Err(AppError::Conflict(format!(
+                "version {wanted} is not the latest"
+            ))),
+        }
     }
 }
 
@@ -87,8 +116,9 @@ impl ShelfStore for InMemoryShelfStore {
         if version.title.is_some() {
             *entry = title;
         }
+        drop(titles);
+        let (number, replaces) = self.plan_number(version)?;
         let mut versions = self.versions.lock().unwrap();
-        let number = versions.iter().filter(|v| v.slug == version.slug).count() as i32 + 1;
         let version_id = Uuid::new_v4();
         let files: Vec<CreatedFile> = version
             .files
@@ -102,7 +132,8 @@ impl ShelfStore for InMemoryShelfStore {
             .collect();
         versions.push(StoredVersion {
             slug: version.slug.clone(),
-            ready: false,
+            status: Status::Pending,
+            replaces,
             keys: files.iter().map(|f| f.object_key.clone()).collect(),
             summary: summary_of(version, version_id, number),
         });
@@ -119,7 +150,7 @@ impl ShelfStore for InMemoryShelfStore {
             .iter()
             .find(|v| v.summary.id == version_id)
             .map(|v| PendingVersion {
-                ready: v.ready,
+                ready: v.status != Status::Pending,
                 files: v
                     .keys
                     .iter()
@@ -134,17 +165,25 @@ impl ShelfStore for InMemoryShelfStore {
 
     async fn mark_ready(&self, version_id: Uuid) -> AppResult<VersionSummary> {
         let mut versions = self.versions.lock().unwrap();
-        let version = versions
-            .iter_mut()
-            .find(|v| v.summary.id == version_id && !v.ready)
+        let index = versions
+            .iter()
+            .position(|v| v.summary.id == version_id && v.status == Status::Pending)
             .ok_or_else(|| AppError::Conflict("version is not pending".to_string()))?;
-        version.ready = true;
-        Ok(version.summary.clone())
+        if let Some(replaced_id) = versions[index].replaces {
+            let replaced = versions
+                .iter_mut()
+                .find(|v| v.summary.id == replaced_id && v.status == Status::Ready)
+                .ok_or_else(|| AppError::Conflict("replaced version changed".to_string()))?;
+            replaced.status = Status::Hidden;
+        }
+        versions[index].status = Status::Ready;
+        Ok(versions[index].summary.clone())
     }
 
     async fn ready_file(&self, file_id: Uuid) -> AppResult<Option<StoredFile>> {
         let versions = self.versions.lock().unwrap();
-        Ok(versions.iter().filter(|v| v.ready).find_map(|v| {
+        let mut ready = versions.iter().filter(|v| v.status == Status::Ready);
+        Ok(ready.find_map(|v| {
             let index = v.summary.files.iter().position(|f| f.id == file_id)?;
             let file = &v.summary.files[index];
             Some(StoredFile {
@@ -153,6 +192,21 @@ impl ShelfStore for InMemoryShelfStore {
                 object_key: v.keys[index].clone(),
             })
         }))
+    }
+
+    async fn retire_version(&self, slug: &str, number: i32, source: Option<&str>) -> AppResult<()> {
+        let mut versions = self.versions.lock().unwrap();
+        let version = versions
+            .iter_mut()
+            .find(|v| {
+                v.slug == slug
+                    && v.summary.number == number
+                    && v.status == Status::Ready
+                    && source.is_none_or(|s| s == v.summary.source)
+            })
+            .ok_or_else(|| AppError::NotFound(format!("version {number}")))?;
+        version.status = Status::Hidden;
+        Ok(())
     }
 }
 

@@ -1,5 +1,6 @@
-//! Authenticated routes. Both the owner and the publisher may read, publish
-//! and download; the principal decides only the recorded version source.
+//! Authenticated routes. Both the owner and the publisher may read, publish,
+//! replace, retire and download; the principal decides the recorded version
+//! source and which versions it may replace or retire.
 
 use ahara_lambda_http::{json_body, json_response, Route};
 use lambda_http::http::{Method, StatusCode};
@@ -64,6 +65,14 @@ pub async fn dispatch(
         let slug = params.require("slug")?;
         let future = create_version(state, principal, slug, request);
         return observe("versions.create", principal, future)
+            .await
+            .map(Some);
+    }
+    if let Some(params) = route.matches(Method::POST, "/pieces/{slug}/versions/{number}/retire")? {
+        let slug = params.require("slug")?;
+        let number = params.parse::<i32>("number")?;
+        let future = retire_version(state, principal, slug, number);
+        return observe("versions.retire", principal, future)
             .await
             .map(Some);
     }
@@ -159,6 +168,23 @@ async fn commit_version(state: &ApiState, version_id: Uuid) -> AppResult<ApiResp
     }
     let version: VersionSummary = state.store.mark_ready(version_id).await?;
     ok(&version)
+}
+
+/// Hides a version that should not have been a revision of its own. The owner may
+/// retire any version; the publisher only the agent's.
+async fn retire_version(
+    state: &ApiState,
+    principal: &Principal,
+    slug: &str,
+    number: i32,
+) -> AppResult<ApiResponse> {
+    validate_slug(slug)?;
+    let source = match principal {
+        Principal::Owner { .. } => None,
+        Principal::Publisher { .. } => Some(principal.source()),
+    };
+    state.store.retire_version(slug, number, source).await?;
+    ok(&serde_json::json!({ "retired": number }))
 }
 
 async fn download(state: &ApiState, file_id: Uuid) -> AppResult<ApiResponse> {
