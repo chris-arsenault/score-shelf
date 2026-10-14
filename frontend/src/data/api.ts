@@ -65,6 +65,15 @@ export type PresignedUpload = {
   headers: Record<string, string>;
 };
 
+/** Reads file bytes from S3 without sending the API's Cognito token. */
+export async function getPresigned(url: string, signal: AbortSignal): Promise<Blob> {
+  const response = await fetchImpl(url, { signal, credentials: "omit" });
+  if (!response.ok) {
+    throw new ApiError(response.status, "download_failed", "The score could not be downloaded.");
+  }
+  return response.blob();
+}
+
 /** Sends file bytes straight to S3 through a presigned URL. */
 export async function putPresigned(upload: PresignedUpload, file: Blob): Promise<void> {
   const response = await fetchImpl(upload.url, {

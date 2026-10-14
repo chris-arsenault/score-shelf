@@ -2,6 +2,12 @@
 
 All notable user-visible changes are recorded here.
 
+## Unreleased
+
+### Shelf
+
+- Added browser score previews for MusicXML and compressed MXL files, with a wide desktop viewer, zoom controls and downloads. Phones use a full-screen viewer with scrolling.
+
 ## v0.2.0 - 2026-09-27
 
 ### Shelf

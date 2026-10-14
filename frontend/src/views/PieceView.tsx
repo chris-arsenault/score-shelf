@@ -1,4 +1,7 @@
+import { useCallback, useState } from "react";
+
 import { ErrorBanner, ViewHeader } from "../components/SharedUI";
+import { ScorePreview } from "../components/ScorePreview";
 import { UploadForm } from "../components/UploadForm";
 import { formatBytes, formatDate, sourceLabel } from "../data/format";
 import { downloadUrl, getPiece } from "../data/shelf";
@@ -10,6 +13,8 @@ type Props = { slug: string };
 export function PieceView({ slug }: Props) {
   const piece = useLoaded(`piece:${slug}`, () => getPiece(slug));
   const download = useAsyncAction();
+  const [preview, setPreview] = useState<ShelfFile | null>(null);
+  const closePreview = useCallback(() => setPreview(null), []);
 
   const open = (file: ShelfFile) =>
     download.run(`Preparing ${file.filename}`, async () => {
@@ -30,15 +35,22 @@ export function PieceView({ slug }: Props) {
       {download.busy && <p className="notice">{download.busy}…</p>}
       <ol className="version-list">
         {(piece.data?.versions ?? []).map((version) => (
-          <VersionItem key={version.id} version={version} onOpen={open} />
+          <VersionItem key={version.id} version={version} onOpen={open} onPreview={setPreview} />
         ))}
       </ol>
       <UploadForm slug={slug} onUploaded={piece.reload} />
+      {preview && <ScorePreview key={preview.id} file={preview} onClose={closePreview} />}
     </main>
   );
 }
 
-function VersionItem({ version, onOpen }: { version: Version; onOpen: (f: ShelfFile) => void }) {
+type VersionProps = {
+  version: Version;
+  onOpen: (file: ShelfFile) => void;
+  onPreview: (file: ShelfFile) => void;
+};
+
+function VersionItem({ version, onOpen, onPreview }: VersionProps) {
   return (
     <li className="panel">
       <div className="version-head">
@@ -57,6 +69,16 @@ function VersionItem({ version, onOpen }: { version: Version; onOpen: (f: ShelfF
               <span>{file.filename}</span>
               <span className="card-meta">{formatBytes(file.size_bytes)}</span>
             </button>
+            {file.kind === "musicxml" && (
+              <button
+                type="button"
+                className="btn btn-quiet"
+                aria-label={`Preview ${file.filename}`}
+                onClick={() => onPreview(file)}
+              >
+                Preview
+              </button>
+            )}
           </li>
         ))}
       </ul>

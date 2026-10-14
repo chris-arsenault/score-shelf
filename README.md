@@ -5,6 +5,19 @@ publishes each MusicXML/MIDI export as a numbered version of a piece; the
 owner browses and downloads versions on a phone and uploads hand edits back
 as owner versions for the agent to pull.
 
+## Score previews
+
+Open a piece and select **Preview** beside a MusicXML file (`.musicxml`,
+`.xml` or compressed `.mxl`) to view its sheet music. The viewer uses the
+desktop window's width, with zoom controls and a download button. Close it
+with **Close** or Escape. On a phone it fills the screen; scroll sideways
+for wider scores.
+
+Scores render in the browser using a bundled OpenSheetMusicDisplay renderer
+that loads when a preview opens. File bytes come directly from the private
+S3 bucket through a signed URL; no third-party rendering service receives
+the score. Engraving may differ from your notation editor.
+
 ## Architecture
 
 | Part | What it is |

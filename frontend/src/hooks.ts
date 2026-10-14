@@ -1,19 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /** Busy/error tracking for async actions (ADR 015). */
 export function useAsyncAction() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const sequence = useRef(0);
 
   const run = useCallback(async (label: string, fn: () => Promise<unknown>) => {
+    const current = ++sequence.current;
     setBusy(label);
     setError(null);
     try {
       await fn();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (current === sequence.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(null);
+      if (current === sequence.current) setBusy(null);
     }
   }, []);
 

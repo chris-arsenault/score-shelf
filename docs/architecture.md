@@ -9,7 +9,7 @@ versions from the dev box; the owner downloads them and uploads hand edits.
 | Component                   | Responsibility                                                                 |
 | --------------------------- | ------------------------------------------------------------------------------ |
 | `backend/api`               | Rust HTTP Lambda: auth decisions, validation, PostgreSQL store, S3 presigning   |
-| `frontend/`                 | Vite React SPA: sign-in with TOTP, piece list, versions, downloads, uploads     |
+| `frontend/`                 | Vite React SPA: sign-in with TOTP, piece list, versions, score previews, downloads, uploads |
 | `db/migrations/`            | `pieces`, `versions`, `version_files`                                           |
 | `infrastructure/terraform/` | Website, API, Cognito app client, private bucket, runtime config, alarms        |
 | `scripts/shelf.sh`          | Publisher client: client-credentials token, publish (or replace), retire, list, pull |
@@ -85,3 +85,18 @@ among ready versions.
 Objects are stored at `pieces/{slug}/v{number}/{file_id}/{filename}` in a
 versioned, AES256-encrypted bucket with public access blocked. The bucket's
 CORS rule allows PUT/GET/HEAD from the app origin and `localhost:5173`.
+
+## Score previews
+
+The frontend renders MusicXML and compressed MXL files to SVG with
+OpenSheetMusicDisplay, bundled as a separate chunk loaded on demand. It
+reuses `GET /files/{id}/download` to obtain an authorized URL, then fetches
+the file directly from S3 without forwarding the Cognito token. The
+attachment disposition also works for this fetch; no separate preview
+route or stored derivative is needed.
+
+The viewer uses a native modal dialog with zoom and download controls.
+Notation stays black on white paper in both color themes. Resizing the
+desktop viewer lays out the score again; a minimum paper width preserves
+readability with sideways scrolling on phones. Closing aborts pending S3
+transfers and releases the renderer and resize observer.

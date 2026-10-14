@@ -1,6 +1,6 @@
 /** Typed calls to the Score Shelf API. */
 
-import { apiGet, apiPost, putPresigned } from "./api";
+import { apiGet, apiPost, getPresigned, putPresigned } from "./api";
 import type { PresignedUpload } from "./api";
 
 export type FileKind = "musicxml" | "midi" | "audio" | "pdf" | "other";
@@ -55,6 +55,12 @@ export function getPiece(slug: string): Promise<PieceDetail> {
 export async function downloadUrl(fileId: string): Promise<string> {
   const body = await apiGet<{ url: string }>(`/files/${encodeURIComponent(fileId)}/download`);
   return body.url;
+}
+
+export async function loadScoreFile(fileId: string, signal: AbortSignal): Promise<Blob> {
+  const url = await downloadUrl(fileId);
+  signal.throwIfAborted();
+  return getPresigned(url, signal);
 }
 
 const KIND_BY_EXTENSION: Record<string, FileKind> = {
